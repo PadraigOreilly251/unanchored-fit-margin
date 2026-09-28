@@ -58,15 +58,21 @@ core estimator's `lastUsageIndex === null`):
 
 | event | state |
 |---|---|
-| session start | unanchored (conservative until first real usage) |
+| session start / `session_start` | unanchored (conservative until first real usage) |
+| `session_tree` (re-branch/rewind) | unanchored (the anchored usage may live on another branch) |
 | `session_compact` | unanchored |
 | `message_end`: assistant with real usage, stopReason not `error`/`aborted` | anchored |
 
 The clamp itself runs in `before_provider_request` on the final
 OpenAI-format payload (both `max_tokens` and `max_completion_tokens`
-variants). The re-estimate counts message text, tool calls, and the payload's
-`tools` array, with images counted at the core's 4,800-char constant rather
-than at face value (a 1 MP base64 image is ~1.3 M chars).
+variants). The context window is read **live from `ctx.model`** on each
+request (the `model_select` event is a fallback for processes where
+`ctx.model` is undefined — the two diverge when the model is selected
+before the extension loads, which would otherwise leave the window at 0
+and the clamp silently no-oping). The re-estimate counts message text,
+tool calls, and the payload's `tools` array, with images counted at the
+core's 4,800-char constant rather than at face value (a 1 MP base64 image
+is ~1.3 M chars). Audit lines carry the model label for forensics.
 
 **Why 0.4:** the two measured undercounts (≥ 4,097 ≈ 12% of the estimate on
 the vLLM incident; 13,283 = 31.6% on the halogen case) both sit under it, with

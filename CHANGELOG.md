@@ -4,6 +4,26 @@ Notable changes to `unanchored-fit-margin`, newest first. Dates are UTC.
 Incident references are deliberately date + model + shape only — no session
 ids or payloads in a public repo.
 
+## [1.1.0] — 2026-09-28
+
+Hardening after a third in-class incident (2026-09-28, Qwen3.8-27B MoE via
+vLLM, 131,072 window; shape: post-compaction request 400'd on the image
+cap, and an earlier request in the same session 400'd on context length
+with the clamp not engaged).
+
+- Context window is now read **live from `ctx.model`** in
+  `before_provider_request`; `model_select` is kept only as a fallback.
+  1.0.0 tracked `contextWindow` from `model_select` alone — when the model
+  was selected before the extension loaded the window stayed 0 and the
+  clamp silently no-oped, exactly when the post-compaction context was at
+  its riskiest. No event state needed for the window anymore.
+- `unanchored` now also resets on `session_start` and `session_tree`
+  (re-branch/rewind: the anchored usage may live on a different branch).
+- Audit lines carry the model label (`model=provider/id`) for forensics.
+- Behavior unchanged otherwise: same margin (`max(4096, est·0.4)`), same
+  floor (8192), same anchor gate; the 1.0.0 mock-harness suite passes
+  unmodified against 1.1.0.
+
 ## [1.0.0] — 2026-09-27
 
 Initial release.

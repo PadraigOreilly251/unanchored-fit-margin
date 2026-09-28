@@ -46,6 +46,12 @@
  *          PI_UNANCHORED_RATIO=0.6    stronger margin (default 0.4)
  * Revert:  delete this file (or /reload after deleting)
  *
+ * v1.1.0 (2026-09-28): contextWindow now read LIVE from ctx.model in
+ * before_provider_request (incident #3: model_select fired before the
+ * extension loaded -> window=0 -> silent no-op clamp skip). unanchored
+ * also resets on session_start / session_tree. Audit lines carry the
+ * model label for forensics.
+ *
  * Note: this is the field-test vehicle for a 3-line core patch
  * (clampMaxTokensToContext: margin = lastUsageIndex === null
  *  ? max(4096, est*0.4) : 4096). The extension survives pi updates; the core
@@ -56,7 +62,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const FLOOR = 4096; // core CONTEXT_SAFETY_TOKENS
 const MIN_OUT = 8192; // core MIN_USABLE_MAX_TOKENS
 const IMG_CHARS = 4800; // core ESTIMATED_IMAGE_CHARS (1600 tokens worth)
@@ -105,6 +111,14 @@ export default function (pi: ExtensionAPI) {
 	pi.on("model_select", (e) => {
 		contextWindow = (e as any).model?.contextWindow ?? 0;
 	});
+	pi.on("session_start", () => {
+		unanchored = true;
+	});
+	pi.on("session_tree", () => {
+		// Re-branch/rewind: the anchored usage may live on a different branch.
+		// Conservative until the next real engine usage.
+		unanchored = true;
+	});
 	pi.on("session_compact", () => {
 		unanchored = true;
 	});
@@ -121,10 +135,21 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("before_provider_request", (e) => {
-		if (!enabled() || !unanchored || contextWindow <= 0) return;
+	pi.on("before_provider_request", (e, ctx) => {
+		if (!enabled() || !unanchored) return;
 		const p = (e as any).payload;
 		if (!p || typeof p !== "object") return;
+		// Live context window from the CURRENT model. Incident #3
+		// (2026-09-28 16:28Z, 01a0e8a4): the process selected its model before
+		// this extension loaded, so model_select never fired, contextWindow
+		// stayed 0 and the clamp silently no-oped right after a pi-vcc
+		// compaction. ctx.model is live and needs no event state.
+		const model = (ctx as any)?.model;
+		const window =
+			typeof model?.contextWindow === "number" && model.contextWindow > 0
+				? model.contextWindow
+				: contextWindow;
+		if (window <= 0) return;
 		const field: "max_tokens" | "max_completion_tokens" | undefined =
 			typeof p.max_tokens === "number"
 				? "max_tokens"
@@ -140,10 +165,11 @@ export default function (pi: ExtensionAPI) {
 			4,
 		);
 		const margin = Math.max(FLOOR, Math.ceil(est * ratio()));
-		const capped = Math.max(MIN_OUT, contextWindow - est - margin);
+		const capped = Math.max(MIN_OUT, window - est - margin);
 		if (capped < raw) {
 			p[field] = capped;
-			audit(`v${VERSION} clamped est=${est} margin=${margin} ${raw}->${capped} ctx=${contextWindow}`);
+			const label = model?.provider ? `${model.provider}/${model.id}` : "?";
+			audit(`v${VERSION} clamped est=${est} margin=${margin} ${raw}->${capped} ctx=${window} model=${label}`);
 		}
 	});
 }
